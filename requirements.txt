@@ -1,0 +1,20 @@
+# ClinicalExtract — Medical Information Extraction with LangExtract
+# Python 3.10+
+
+# Core: LangExtract (Google's extraction library)
+langextract>=1.1.0,<2.0.0
+
+# UI
+streamlit>=1.38.0
+
+# Data & export
+pandas>=2.0.0
+
+# Console / optional
+rich>=13.0.0
+
+# Visualization (optional)
+# plotly>=5.18.0
+
+# Env
+python-dotenv>=1.0.0

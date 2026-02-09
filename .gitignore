@@ -1,0 +1,26 @@
+# Env and secrets
+.env
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+
+# Outputs
+*.jsonl
+*.html
+samples/*.json
+!samples/.gitkeep
+
+# IDE
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# Eval outputs
+eval_results/
+*.log

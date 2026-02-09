@@ -1,0 +1,8 @@
+DISCHARGE SUMMARY
+
+Patient is a 72 yo F with history of atrial fibrillation and CHF.
+She was admitted for acute on chronic systolic heart failure.
+During stay she was on Lasix 40 mg IV BID, now switched to Lasix 20 mg PO daily at discharge.
+Home medications continued: Metoprolol 25 mg PO BID, Eliquis 5 mg PO BID for stroke prevention.
+Allergies: Sulfa - rash.
+Discharge diagnoses: Acute on chronic systolic heart failure, Atrial fibrillation, Hypertension.
