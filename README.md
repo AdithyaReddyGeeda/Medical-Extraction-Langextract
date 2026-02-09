@@ -25,7 +25,7 @@ ClinicalExtract wraps LangExtract with a **clinical-focused schema** (medication
 
 ```bash
 # Clone and enter
-git clone https://github.com/your-username/clinical-extract.git
+git clone https://github.com/AdithyaReddyGeeda/Medical-Extraction-Langextract.git
 cd clinical-extract
 
 # Virtual environment (recommended)
