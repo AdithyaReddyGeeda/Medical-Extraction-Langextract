@@ -8,14 +8,6 @@
 
 ---
 
-## Demo
-
-<!-- TODO: Add GIF/screenshot of Streamlit app here -->
-<!-- Add screenshot: ![ClinicalExtract Demo](docs/demo.png) -->
-
-*Upload a clinical note → see extracted entities, highlighted spans, and structured JSON.*
-
----
 
 ## Why This Project?
 
@@ -72,19 +64,6 @@ flowchart LR
 
 ---
 
-## Example: Before / After
-
-**Input (snippet):**
-> Patient was given 250 mg IV Cefazolin TID for one week. Discharge diagnosis: Cellulitis, left lower leg. Allergies: Penicillin.
-
-**Output (structured):**
-- **Medications**: Cefazolin — 250 mg, IV, TID, one week
-- **Diagnoses**: Cellulitis (left lower leg)
-- **Adverse events / Allergies**: Penicillin
-
-Each field is linked to exact text spans for verification.
-
----
 
 ## Local LLM Setup (Ollama)
 
