@@ -8,7 +8,6 @@
 
 ---
 
-
 ## Why This Project?
 
 Clinical NLP is hard: free-text notes are messy, and LLMs often **hallucinate** or drift from the source. **LangExtract** addresses this by:
@@ -17,29 +16,55 @@ Clinical NLP is hard: free-text notes are messy, and LLMs often **hallucinate** 
 - **Few-shot prompting** — you guide the model with high-quality examples; no fine-tuning required.
 - **Structured, traceable output** — JSON + evidence snippets + optional HTML visualization.
 
-ClinicalExtract wraps LangExtract with a **clinical-focused schema** (medications, diagnoses, procedures, labs, symptoms, adverse events, demographics) and a **Streamlit demo** so you can run extractions locally with Ollama or in the cloud with Gemini.
+ClinicalExtract wraps LangExtract with a **clinical-focused schema** (medications, diagnoses, procedures, labs, symptoms, adverse events, demographics) and a **Streamlit** app. You can run **Ollama** locally or use **Gemini**, **OpenAI**, or **Anthropic** in the cloud.
+
+---
+
+## Features
+
+| Area | Description |
+|------|-------------|
+| **Providers** | Ollama (local), Gemini, OpenAI GPT-4o / GPT-4o-mini, Anthropic Claude |
+| **Input** | Paste text, single **.txt / .pdf / .docx**, **batch** multi-file upload, or built-in samples |
+| **Caching** | Repeated extractions with the same settings are cached (`@st.cache_data`) to avoid redundant LLM calls |
+| **Evidence** | Grouped view by `medication_group` / `lab_group` plus ungrouped “Other” |
+| **History** | Sidebar keeps recent single-note runs (re-download JSON); batch runs are not stored |
+| **Evaluation** | `evaluate.py` runs extraction against gold JSON and writes `eval_results/eval_results.json` |
 
 ---
 
 ## Installation & Quick Start
 
 ```bash
-# Clone and enter
 git clone https://github.com/AdithyaReddyGeeda/Medical-Extraction-Langextract.git
-cd clinical-extract
+cd Medical-Extraction-Langextract
 
-# Virtual environment (recommended)
 python -m venv .venv
 source .venv/bin/activate   # Windows: .venv\Scripts\activate
 
-# Install
 pip install -r requirements.txt
 
-# Run the Streamlit app
+# Optional: copy .env.example to .env and add API keys
+cp .env.example .env
+
 streamlit run app.py
 ```
 
-Open **http://localhost:8501**. Upload a clinical note (or use a sample), pick an LLM (Ollama or Gemini), and click **Extract**.
+Open **http://localhost:8501**. Choose input mode, pick a provider and model in the sidebar, then **Extract** (or **Extract All** in batch mode).
+
+---
+
+## Environment variables
+
+Set keys in `.env` or your shell (see `.env.example`):
+
+| Variable | Used for |
+|----------|----------|
+| `LANGEXTRACT_API_KEY` | Gemini (LangExtract) |
+| `OPENAI_API_KEY` | OpenAI |
+| `ANTHROPIC_API_KEY` | Anthropic |
+
+Ollama does not require API keys; ensure the server is running (e.g. `ollama serve`) and models are pulled.
 
 ---
 
@@ -60,14 +85,11 @@ flowchart LR
 1. **Input**: Raw text or file (discharge summary, progress note, radiology report).
 2. **Chunking**: Long documents are split; LangExtract handles this natively.
 3. **Extraction**: LLM runs with your prompt + few-shot examples; outputs entities + character spans.
-4. **Output**: Structured JSON, tables, and optional HTML visualization with highlighted spans.
+4. **Output**: Structured JSON, tables, optional HTML visualization, and grouped evidence.
 
 ---
 
-
-## Local LLM Setup (Ollama)
-
-For fully local extraction (no API keys):
+## Local LLM (Ollama)
 
 ```bash
 # Install Ollama from https://ollama.com
@@ -78,53 +100,61 @@ ollama pull qwen2.5-coder:32b-instruct
 ollama serve   # if not already running
 ```
 
-In the Streamlit sidebar, select the model you pulled. Use **Ollama** as the provider.
+In the app sidebar, choose **Ollama (local)** and the model you pulled.
 
 ---
 
-## Project Layout
+## Evaluation
+
+Place a gold label file next to each sample note: for `samples/note.txt`, add `samples/note.json` (list of extractions with `class` and `text`).
+
+Run the full pipeline (extracts, writes `*_pred.json`, scores):
+
+```bash
+python evaluate.py --provider gemini --model gemini-2.5-flash
+```
+
+Useful flags:
+
+| Flag | Default | Meaning |
+|------|---------|--------|
+| `--samples` | `samples/` | Directory of `.txt` files |
+| `--output` | `eval_results/` | Where `eval_results.json` is written |
+| `--provider` | `gemini` | `gemini`, `openai`, `anthropic`, `ollama` |
+| `--model` | `gemini-2.5-flash` | Model id |
+| `--match` | `partial` | `partial` or `exact` span matching |
+| `--skip-extraction` | off | Score existing `*_pred.json` only |
+
+The report includes per-file aggregate metrics, overall aggregate, and a **per-class** precision / recall / F1 breakdown. You can also use `python -m utils.eval` for a lighter path that only reads existing predictions.
+
+---
+
+## Project layout
 
 ```
-clinical-extract/
-├── app.py              # Streamlit demo
-├── extractor.py         # LangExtract setup, clinical schema, few-shots
+.
+├── app.py                 # Streamlit UI
+├── evaluate.py            # CLI evaluation (runs extractor + metrics)
+├── extractor.py           # LangExtract wiring, clinical schema, few-shots
 ├── utils/
 │   ├── visualization.py # HTML viz helpers
-│   └── eval.py          # Precision/recall eval script
-├── samples/             # Clinical note snippets + optional gold JSON
+│   └── eval.py            # Metrics, load_gold, per-class evaluation
+├── samples/               # .txt snippets + optional matching .json gold
 ├── requirements.txt
+├── .env.example
 ├── README.md
+├── UPGRADE.md
 ├── .gitignore
 └── LICENSE
 ```
 
 ---
 
-## Evaluation
-
-A small eval script is provided to compute rough precision/recall against gold annotations in `samples/`:
-
-```bash
-python -m utils.eval --samples samples/ --output eval_results/
-```
-
-Example results (placeholder):
-
-| Metric    | Medications | Diagnoses | Procedures |
-|----------|-------------|-----------|------------|
-| Precision | 0.92       | 0.88      | 0.85       |
-| Recall    | 0.89       | 0.86      | 0.82       |
-| F1        | 0.90       | 0.87      | 0.83       |
-
-*(Values are illustrative; run on your own gold data.)*
-
----
-
-## Limitations & Future Work
+## Limitations & future work
 
 - **Not for clinical decision-making** — extraction is for structuring and search; always verify with a clinician.
-- **Negation / temporality** — current schema does not explicitly model “denied”, “history of”, or time expressions; future versions may add this.
-- **Relation extraction** — medication→indication and adverse event→drug are partially modeled via attributes; full relation graphs are a stretch goal.
+- **Negation / temporality** — the schema does not fully model “denied”, “history of”, or time expressions everywhere.
+- **Relation extraction** — medication→indication and similar links are partially modeled via attributes; full relation graphs are a stretch goal.
 - **Languages** — examples and prompts are English-only.
 
 ---
@@ -138,9 +168,9 @@ If you use LangExtract in research or production, please cite:
 
 ---
 
-## Upgrade
+## Upgrade notes
 
-For dependency bumps, schema improvements, eval, and production options, see **[UPGRADE.md](UPGRADE.md)**.
+For dependency bumps, schema improvements, and production options, see **[UPGRADE.md](UPGRADE.md)**.
 
 ---
 
