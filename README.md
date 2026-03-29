@@ -138,6 +138,12 @@ If you use LangExtract in research or production, please cite:
 
 ---
 
+## Upgrade
+
+For dependency bumps, schema improvements, eval, and production options, see **[UPGRADE.md](UPGRADE.md)**.
+
+---
+
 ## License
 
 MIT. See [LICENSE](LICENSE).

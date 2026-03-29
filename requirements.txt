@@ -1,11 +1,18 @@
 # ClinicalExtract — Medical Information Extraction with LangExtract
 # Python 3.10+
 
-# Core: LangExtract (Google's extraction library)
-langextract>=1.1.0,<2.0.0
+# Core: LangExtract (Google's extraction library) + OpenAI provider extra
+langextract[openai]>=1.1.1,<2.0.0
+
+# Anthropic (direct API path in extractor)
+anthropic>=0.25.0
+
+# Document parsing
+pdfplumber
+python-docx
 
 # UI
-streamlit>=1.38.0
+streamlit>=1.40.0
 
 # Data & export
 pandas>=2.0.0

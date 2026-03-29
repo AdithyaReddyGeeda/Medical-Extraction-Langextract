@@ -7,10 +7,12 @@ few-shot examples, and runs extraction with grounding and optional chunking.
 """
 from __future__ import annotations
 
+import json
 import os
+import re
 import textwrap
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import langextract as lx
 
@@ -68,6 +70,14 @@ Entity types to extract:
 Use attributes to link related extractions (e.g. medication_group for all fields of one medication).
 List entities in order of appearance. Do not invent text that is not in the source.
 """).strip()
+
+# Instructions appended for Anthropic JSON-only output (offsets aligned to source text).
+_ANTHROPIC_JSON_SUFFIX = """
+Return ONLY a single JSON object (no markdown code fences) with this exact shape:
+{"extractions": [{"extraction_class": "string", "extraction_text": "string", "attributes": {}, "start_pos": 0, "end_pos": 0}]}
+Use verbatim substrings from the document. start_pos and end_pos are 0-based character indices into the document text (end exclusive).
+If an attribute value is not applicable, use an empty object for attributes.
+""".strip()
 
 
 def _example_discharge() -> lx.data.ExampleData:
@@ -221,12 +231,127 @@ def get_clinical_examples() -> list[lx.data.ExampleData]:
     ]
 
 
+def _serialize_examples_for_anthropic(examples: list[lx.data.ExampleData]) -> str:
+    """Serialize few-shot examples as JSON for the Anthropic prompt."""
+    blocks: list[dict[str, Any]] = []
+    for ex in examples:
+        ex_rows: list[dict[str, Any]] = []
+        for e in ex.extractions:
+            ex_rows.append(
+                {
+                    "extraction_class": e.extraction_class,
+                    "extraction_text": e.extraction_text,
+                    "attributes": dict(e.attributes) if e.attributes else {},
+                }
+            )
+        blocks.append({"text": ex.text, "extractions": ex_rows})
+    return json.dumps(blocks, indent=2, ensure_ascii=False)
+
+
+def _parse_json_from_model_text(raw: str) -> dict[str, Any]:
+    """Extract JSON object from model output (handles optional ```json fences)."""
+    text = raw.strip()
+    m = re.search(r"```(?:json)?\s*([\s\S]*?)```", text)
+    if m:
+        text = m.group(1).strip()
+    return json.loads(text)
+
+
+def _normalize_attributes(attrs: Any) -> dict[str, str | list[str]] | None:
+    """Ensure attributes match Extraction typing (str or list[str] values)."""
+    if not attrs or not isinstance(attrs, dict):
+        return None
+    out: dict[str, str | list[str]] = {}
+    for k, v in attrs.items():
+        if isinstance(v, list):
+            out[str(k)] = [str(x) for x in v]
+        else:
+            out[str(k)] = str(v)
+    return out or None
+
+
+def _align_char_interval(source: str, extraction_text: str, start_pos: Any, end_pos: Any) -> lx.data.CharInterval | None:
+    """Prefer model offsets when valid; otherwise locate extraction_text in source."""
+    if (
+        isinstance(start_pos, int)
+        and isinstance(end_pos, int)
+        and 0 <= start_pos < end_pos <= len(source)
+        and source[start_pos:end_pos] == extraction_text
+    ):
+        return lx.data.CharInterval(start_pos=start_pos, end_pos=end_pos)
+    idx = source.find(extraction_text)
+    if idx != -1:
+        return lx.data.CharInterval(start_pos=idx, end_pos=idx + len(extraction_text))
+    return None
+
+
+def _extract_anthropic(
+    text: str,
+    model_id: str,
+    api_key: str | None,
+    *,
+    max_tokens: int = 8192,
+) -> lx.data.AnnotatedDocument:
+    """Run extraction via Anthropic Messages API; returns AnnotatedDocument aligned to source text."""
+    import anthropic
+
+    key = api_key or os.environ.get("ANTHROPIC_API_KEY")
+    if not key:
+        raise ValueError("Anthropic API key missing: set ANTHROPIC_API_KEY or pass anthropic_api_key.")
+
+    examples = get_clinical_examples()
+    few_shot_json = _serialize_examples_for_anthropic(examples)
+    user_body = (
+        f"{CLINICAL_PROMPT}\n\n"
+        f"Few-shot examples (JSON):\n{few_shot_json}\n\n"
+        f"Document to extract from:\n---\n{text}\n---\n\n"
+        f"{_ANTHROPIC_JSON_SUFFIX}"
+    )
+
+    client = anthropic.Anthropic(api_key=key)
+    message = client.messages.create(
+        model=model_id,
+        max_tokens=max_tokens,
+        messages=[{"role": "user", "content": user_body}],
+    )
+    raw_text = ""
+    for block in message.content:
+        if block.type == "text":
+            raw_text += block.text
+
+    payload = _parse_json_from_model_text(raw_text)
+    raw_extractions = payload.get("extractions")
+    if not isinstance(raw_extractions, list):
+        raise ValueError("Anthropic response JSON missing 'extractions' array.")
+
+    extractions: list[lx.data.Extraction] = []
+    for item in raw_extractions:
+        if not isinstance(item, dict):
+            continue
+        ec = str(item.get("extraction_class", ""))
+        et = str(item.get("extraction_text", ""))
+        attrs = _normalize_attributes(item.get("attributes"))
+        ci = _align_char_interval(text, et, item.get("start_pos"), item.get("end_pos"))
+        extractions.append(
+            lx.data.Extraction(
+                extraction_class=ec,
+                extraction_text=et,
+                attributes=attrs,
+                char_interval=ci,
+            )
+        )
+    return lx.data.AnnotatedDocument(text=text, extractions=extractions)
+
+
 def extract(
     text_or_path: str | Path,
     model_id: str = "gemini-2.5-flash",
     *,
+    provider: str = "gemini",
     model_url: str | None = None,
     api_key: str | None = None,
+    openai_api_key: str | None = None,
+    anthropic_api_key: str | None = None,
     temperature: float = 0.2,
     max_tokens: int = 8192,
     extraction_passes: int = 1,
@@ -239,11 +364,14 @@ def extract(
 
     Args:
         text_or_path: Clinical text string or path to .txt file.
-        model_id: LLM model (e.g. gemini-2.5-flash, or for Ollama: qwen2.5-coder:32b-instruct).
+        model_id: LLM model (e.g. gemini-2.5-flash, gpt-4o, or Ollama model id).
+        provider: One of gemini, ollama, openai, anthropic.
         model_url: For Ollama, base URL (default http://localhost:11434).
-        api_key: Optional API key (else uses LANGEXTRACT_API_KEY).
+        api_key: Optional API key for Gemini (else LANGEXTRACT_API_KEY).
+        openai_api_key: API key for OpenAI (else OPENAI_API_KEY).
+        anthropic_api_key: API key for Anthropic (else ANTHROPIC_API_KEY).
         temperature: LLM temperature.
-        max_tokens: Max output tokens.
+        max_tokens: Max output tokens (Anthropic path).
         extraction_passes: Number of passes for long docs (improves recall).
         max_workers: Parallel workers for chunked extraction.
         max_char_buffer: Chunk size for long documents.
@@ -260,10 +388,37 @@ def extract(
     else:
         text = text_or_path
 
+    if provider == "anthropic":
+        return _extract_anthropic(
+            text,
+            model_id,
+            anthropic_api_key,
+            max_tokens=max_tokens,
+        )
+
     examples = get_clinical_examples()
+
+    if provider == "openai":
+        oa_key = openai_api_key or os.environ.get("OPENAI_API_KEY")
+        kwargs: dict[str, Any] = {
+            "text_or_documents": text,
+            "prompt_description": CLINICAL_PROMPT,
+            "examples": examples,
+            "model_id": model_id,
+            "extraction_passes": extraction_passes,
+            "max_workers": max_workers,
+            "max_char_buffer": max_char_buffer,
+            "fence_output": True,
+            "use_schema_constraints": False,
+            "api_key": oa_key,
+        }
+        result = lx.extract(**kwargs)
+        return result
+
+    # Gemini and Ollama use LangExtract with provider resolved from model_id / URL
     api_key = api_key or os.environ.get("LANGEXTRACT_API_KEY")
 
-    kwargs: dict[str, Any] = {
+    kwargs = {
         "text_or_documents": text,
         "prompt_description": CLINICAL_PROMPT,
         "examples": examples,
@@ -275,13 +430,13 @@ def extract(
     if api_key:
         kwargs["api_key"] = api_key
 
-    if use_ollama:
+    if use_ollama or provider == "ollama":
         kwargs["fence_output"] = False
         kwargs["use_schema_constraints"] = False
         if model_url:
             kwargs["model_url"] = model_url
     else:
-        # Cloud models can use schema; keep defaults
+        # Cloud Gemini: keep LangExtract defaults for schema / fences
         pass
 
     result = lx.extract(**kwargs)
@@ -291,7 +446,8 @@ def extract(
 def extractions_to_serializable(result: lx.data.AnnotatedDocument) -> list[dict[str, Any]]:
     """Turn AnnotatedDocument extractions into a list of dicts (for JSON/table export)."""
     out = []
-    for e in result.extractions:
+    src = result.text or ""
+    for e in result.extractions or []:
         item = {
             "class": e.extraction_class,
             "text": e.extraction_text,
@@ -300,6 +456,27 @@ def extractions_to_serializable(result: lx.data.AnnotatedDocument) -> list[dict[
         if e.char_interval is not None:
             item["start"] = e.char_interval.start_pos
             item["end"] = e.char_interval.end_pos
-            item["snippet"] = result.text[e.char_interval.start_pos : e.char_interval.end_pos]
+            item["snippet"] = src[e.char_interval.start_pos : e.char_interval.end_pos]
         out.append(item)
     return out
+
+
+def rows_to_annotated_document(rows: list[dict[str, Any]], text: str) -> lx.data.AnnotatedDocument:
+    """Rebuild AnnotatedDocument from cached serializable rows + source text (for visualization)."""
+    extractions: list[lx.data.Extraction] = []
+    for r in rows:
+        attrs = r.get("attributes")
+        if attrs is not None and not isinstance(attrs, dict):
+            attrs = dict(attrs)
+        ci = None
+        if r.get("start") is not None and r.get("end") is not None:
+            ci = lx.data.CharInterval(start_pos=int(r["start"]), end_pos=int(r["end"]))
+        extractions.append(
+            lx.data.Extraction(
+                extraction_class=str(r.get("class", "")),
+                extraction_text=str(r.get("text", "")),
+                attributes=attrs if attrs else None,
+                char_interval=ci,
+            )
+        )
+    return lx.data.AnnotatedDocument(text=text, extractions=extractions)
