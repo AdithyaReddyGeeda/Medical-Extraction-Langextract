@@ -81,6 +81,53 @@ def compute_metrics(
     return {"precision": precision, "recall": recall, "f1": f1, "tp": tp, "pred": num_pred, "gold": num_gold}
 
 
+def compute_per_class_metrics(
+    predicted: list[dict[str, Any]],
+    gold: list[dict[str, Any]],
+    match_fn: str = "partial",
+) -> dict[str, dict[str, float | int]]:
+    """
+    Per extraction_class: precision, recall, F1, tp, pred count, gold count.
+    match_fn: "partial" (overlap) or "exact" — same semantics as compute_metrics.
+    """
+    match = partial_match if match_fn == "partial" else exact_match
+    classes: set[str] = set()
+    for p in predicted:
+        classes.add(str(p.get("class", "")))
+    for g in gold:
+        classes.add(str(g.get("class", "")))
+
+    out: dict[str, dict[str, float | int]] = {}
+    for c in sorted(classes):
+        pred_c = [p for p in predicted if str(p.get("class", "")) == c]
+        gold_c = [g for g in gold if str(g.get("class", "")) == c]
+        tp = 0
+        matched_gold: set[int] = set()
+        for p in pred_c:
+            p_text = p.get("text", "")
+            for i, g in enumerate(gold_c):
+                if i in matched_gold:
+                    continue
+                if match(str(p_text), str(g.get("text", ""))):
+                    tp += 1
+                    matched_gold.add(i)
+                    break
+        num_pred = len(pred_c)
+        num_gold = len(gold_c)
+        precision = tp / num_pred if num_pred else 0.0
+        recall = tp / num_gold if num_gold else 0.0
+        f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
+        out[c] = {
+            "precision": precision,
+            "recall": recall,
+            "f1": f1,
+            "tp": tp,
+            "pred": num_pred,
+            "gold": num_gold,
+        }
+    return out
+
+
 def run_eval(samples_dir: str | Path, output_dir: str | Path | None = None) -> dict[str, Any]:
     """
     Run evaluation over samples/ that have both .txt and .json (gold).

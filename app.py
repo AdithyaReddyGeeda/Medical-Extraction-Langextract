@@ -33,8 +33,29 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+if "history" not in st.session_state:
+    st.session_state.history = []
+
 st.title("ClinicalExtract — Medical Information Extraction with LangExtract")
 st.caption("Turn clinical notes into structured JSON with precise source grounding. Powered by [LangExtract](https://github.com/google/langextract).")
+
+
+def parse_document_bytes(filename: str, raw: bytes) -> str:
+    """Decode uploaded bytes to plain text (txt / pdf / docx). Raises on unsupported type or parse failure."""
+    name = filename.lower()
+    if name.endswith(".txt"):
+        return raw.decode("utf-8", errors="replace")
+    if name.endswith(".pdf"):
+        import pdfplumber
+
+        with pdfplumber.open(io.BytesIO(raw)) as pdf:
+            return "\n".join((p.extract_text() or "") for p in pdf.pages)
+    if name.endswith(".docx"):
+        import docx
+
+        doc = docx.Document(io.BytesIO(raw))
+        return "\n".join(p.text for p in doc.paragraphs)
+    raise ValueError("Unsupported file type; use .txt, .pdf, or .docx.")
 
 
 @st.cache_data(show_spinner=False)
@@ -89,6 +110,11 @@ def _render_evidence_group(label: str, group_rows: list[dict]) -> None:
             st.markdown(f"**{r.get('class', '')}** (chars {start}-{end}): `{snippet}`")
             if r.get("attributes"):
                 st.caption(f"Attributes: {r['attributes']}")
+
+
+def _history_label(note_text: str) -> str:
+    t = note_text.strip()
+    return (t[:60] + "...") if len(t) > 60 else t
 
 
 # ---------------------------------------------------------------------------
@@ -158,12 +184,45 @@ with st.sidebar:
     extraction_passes = st.slider("Extraction passes (long docs)", min_value=1, max_value=5, value=1)
     max_char_buffer = st.number_input("Max chunk size (chars)", min_value=500, max_value=10000, value=2000, step=500)
 
+    st.divider()
+    st.subheader("History")
+    if not st.session_state.history:
+        st.caption("No extractions yet.")
+    else:
+        for hi, item in enumerate(reversed(st.session_state.history)):
+            exp_label = f"[{item['provider']}] {item['label']} ({item['count']} entities)"
+            with st.expander(exp_label):
+                st.caption(f"Model: {item['model']}")
+                mini = item.get("rows") or []
+                if mini:
+                    df_mini = pd.DataFrame(mini)
+                    cols = [c for c in ("class", "text") if c in df_mini.columns]
+                    if cols:
+                        st.dataframe(df_mini[cols], use_container_width=True, hide_index=True)
+                st.download_button(
+                    "Re-download JSON",
+                    json.dumps(item.get("rows", []), indent=2),
+                    file_name="clinical_extractions.json",
+                    mime="application/json",
+                    key=f"hist_dl_{hi}",
+                )
+    if st.button("Clear history"):
+        st.session_state.history = []
+        st.rerun()
+
 # ---------------------------------------------------------------------------
 # Input: text area or file upload
 # ---------------------------------------------------------------------------
-input_source = st.radio("Input", ["Paste text", "Upload file", "Sample note"], horizontal=True)
+input_source = st.radio(
+    "Input",
+    ["Paste text", "Upload file", "Sample note", "Batch upload"],
+    horizontal=True,
+)
 
 text = ""
+batch_files = None
+extract_all_clicked = False
+
 if input_source == "Paste text":
     text = st.text_area(
         "Clinical note",
@@ -173,27 +232,20 @@ if input_source == "Paste text":
 elif input_source == "Upload file":
     uploaded = st.file_uploader("Upload file", type=["txt", "pdf", "docx"])
     if uploaded:
-        name = uploaded.name.lower()
         raw = uploaded.getvalue()
         try:
-            if name.endswith(".txt"):
-                text = raw.decode("utf-8", errors="replace")
-            elif name.endswith(".pdf"):
-                import pdfplumber
-
-                with pdfplumber.open(io.BytesIO(raw)) as pdf:
-                    text = "\n".join((p.extract_text() or "") for p in pdf.pages)
-            elif name.endswith(".docx"):
-                import docx
-
-                doc = docx.Document(io.BytesIO(raw))
-                text = "\n".join(p.text for p in doc.paragraphs)
-            else:
-                st.error("Unsupported file type. Please upload .txt, .pdf, or .docx.")
+            text = parse_document_bytes(uploaded.name, raw)
         except Exception as parse_err:
             st.error(f"Could not read this file: {parse_err}. Try another file or paste text instead.")
         if text:
             st.text_area("Preview", text[:2000] + ("..." if len(text) > 2000 else ""), height=120, disabled=True)
+elif input_source == "Batch upload":
+    batch_files = st.file_uploader(
+        "Upload files (batch)",
+        type=["txt", "pdf", "docx"],
+        accept_multiple_files=True,
+    )
+    extract_all_clicked = st.button("Extract All", type="primary", use_container_width=True)
 else:
     samples_dir = Path(__file__).resolve().parent / "samples"
     sample_files = list(samples_dir.glob("*.txt"))
@@ -210,10 +262,77 @@ else:
         st.info("No .txt files in samples/. Add some or paste text.")
         text = ""
 
-extract_clicked = st.button("Extract", type="primary", use_container_width=True)
+extract_clicked = False
+if input_source != "Batch upload":
+    extract_clicked = st.button("Extract", type="primary", use_container_width=True)
 
 # ---------------------------------------------------------------------------
-# Run extraction and display results
+# Batch extraction (separate flow; does not use session history)
+# ---------------------------------------------------------------------------
+if extract_all_clicked and input_source == "Batch upload":
+    if not batch_files:
+        st.warning("Upload at least one file before running batch extraction.")
+    else:
+        combined: list[dict] = []
+        n = len(batch_files)
+        progress_bar = st.progress(0)
+        for bi, uploaded in enumerate(batch_files):
+            fname = uploaded.name
+            try:
+                doc_text = parse_document_bytes(fname, uploaded.getvalue())
+            except Exception as e:
+                st.warning(f"{fname}: {e}")
+                progress_bar.progress((bi + 1) / n)
+                continue
+            if not doc_text.strip():
+                st.warning(f"{fname}: empty document after parsing.")
+                progress_bar.progress((bi + 1) / n)
+                continue
+            try:
+                rows, _rt = _cached_extract(
+                    doc_text.strip(),
+                    model_id,
+                    model_url,
+                    use_ollama,
+                    extraction_passes,
+                    max_char_buffer,
+                    provider,
+                    openai_api_key,
+                    anthropic_api_key,
+                )
+                for r in rows:
+                    row_copy = dict(r)
+                    row_copy["file"] = fname
+                    combined.append(row_copy)
+            except Exception as e:
+                st.warning(f"{fname}: {e}")
+            progress_bar.progress((bi + 1) / n)
+        progress_bar.empty()
+        if combined:
+            df_all = pd.DataFrame(combined)
+            col_order = ["file"] + [c for c in df_all.columns if c != "file"]
+            df_all = df_all[col_order]
+            st.subheader("Batch results")
+            st.dataframe(df_all, use_container_width=True)
+            json_buf = io.StringIO()
+            json.dump(combined, json_buf, indent=2)
+            st.download_button(
+                "Download combined JSON",
+                json_buf.getvalue(),
+                file_name="clinical_extractions_batch.json",
+                mime="application/json",
+            )
+            csv_buf = io.StringIO()
+            df_all.to_csv(csv_buf, index=False)
+            st.download_button(
+                "Download combined CSV",
+                csv_buf.getvalue(),
+                file_name="clinical_extractions_batch.csv",
+                mime="text/csv",
+            )
+
+# ---------------------------------------------------------------------------
+# Run extraction and display results (single-note modes)
 # ---------------------------------------------------------------------------
 if extract_clicked and text.strip():
     with st.spinner("Running extraction..."):
@@ -240,6 +359,17 @@ if extract_clicked and text.strip():
             elif provider_label == "Anthropic (cloud)":
                 st.info("Set ANTHROPIC_API_KEY (sidebar or environment).")
             st.stop()
+
+    st.session_state.history.append(
+        {
+            "label": _history_label(text),
+            "model": model_id,
+            "provider": provider,
+            "count": len(rows),
+            "rows": [dict(r) for r in rows],
+            "text": result_text,
+        }
+    )
 
     result = rows_to_annotated_document(rows, result_text)
     st.success(f"Extracted {len(rows)} entities.")
