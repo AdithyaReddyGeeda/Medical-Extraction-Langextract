@@ -67,7 +67,18 @@ Entity types to extract:
 - demographic_sex: sex if mentioned
 - demographic_dob: date of birth if mentioned
 
+- negation: whether the entity is affirmed, negated, or uncertain
+  (e.g. "Denies chest pain" -> negated; "no fever" -> negated; "possible pneumonia" -> uncertain)
+- temporality: timing of the entity relative to the current encounter
+  (e.g. past / current / future / history_of / resolved)
+
 Use attributes to link related extractions (e.g. medication_group for all fields of one medication).
+For negation and temporality, use the attribute fields on the nearest related entity
+rather than emitting a separate extraction span when the signal is embedded in the same phrase.
+For example, add {"negated": "true"} or {"temporality": "history_of"} to the attributes of
+the diagnosis/medication/symptom extraction it modifies.
+When negation or temporality spans are distinct phrases (e.g. "history of"), emit them as
+separate extraction_class values: "negation" and "temporality".
 List entities in order of appearance. Do not invent text that is not in the source.
 """).strip()
 
@@ -75,6 +86,9 @@ List entities in order of appearance. Do not invent text that is not in the sour
 _ANTHROPIC_JSON_SUFFIX = """
 Return ONLY a single JSON object (no markdown code fences) with this exact shape:
 {"extractions": [{"extraction_class": "string", "extraction_text": "string", "attributes": {}, "start_pos": 0, "end_pos": 0}]}
+For negation, add "negated": "true" to the attributes dict of the affected entity.
+For temporality, add "temporality": one of "current", "history_of", "past", "future", "resolved"
+to the attributes dict of the affected entity.
 Use verbatim substrings from the document. start_pos and end_pos are 0-based character indices into the document text (end exclusive).
 If an attribute value is not applicable, use an empty object for attributes.
 """.strip()
@@ -219,6 +233,67 @@ def _example_medication_only() -> lx.data.ExampleData:
     )
 
 
+def _example_negation() -> lx.data.ExampleData:
+    """Few-shot example: explicit negation and uncertainty handling."""
+    text = (
+        "Patient denies fever, chills, or shortness of breath. "
+        "No chest pain reported. "
+        "Possible urinary tract infection. "
+        "History of hypertension, currently well-controlled."
+    )
+    return lx.data.ExampleData(
+        text=text,
+        extractions=[
+            lx.data.Extraction(extraction_class="symptom_sign", extraction_text="fever", attributes={"negated": "true"}),
+            lx.data.Extraction(extraction_class="symptom_sign", extraction_text="chills", attributes={"negated": "true"}),
+            lx.data.Extraction(extraction_class="symptom_sign", extraction_text="shortness of breath", attributes={"negated": "true"}),
+            lx.data.Extraction(extraction_class="symptom_sign", extraction_text="chest pain", attributes={"negated": "true"}),
+            lx.data.Extraction(extraction_class="diagnosis", extraction_text="urinary tract infection", attributes={"certainty": "uncertain"}),
+            lx.data.Extraction(
+                extraction_class="diagnosis",
+                extraction_text="hypertension",
+                attributes={"temporality": "history_of", "diagnosis_status": "resolved"},
+            ),
+        ],
+    )
+
+
+def _example_temporality() -> lx.data.ExampleData:
+    """Few-shot example: past/current/future temporality across diagnoses and meds."""
+    text = (
+        "Past medical history: Type 2 diabetes (resolved after bariatric surgery). "
+        "Current medications: Metformin 500 mg PO BID. "
+        "Plan: will start Lisinopril 10 mg daily next week for newly diagnosed hypertension."
+    )
+    return lx.data.ExampleData(
+        text=text,
+        extractions=[
+            lx.data.Extraction(extraction_class="diagnosis", extraction_text="Type 2 diabetes", attributes={"temporality": "history_of"}),
+            lx.data.Extraction(extraction_class="diagnosis_status", extraction_text="resolved", attributes={"temporality": "past"}),
+            lx.data.Extraction(
+                extraction_class="medication",
+                extraction_text="Metformin",
+                attributes={"temporality": "current", "medication_group": "Metformin"},
+            ),
+            lx.data.Extraction(extraction_class="dosage", extraction_text="500 mg", attributes={"medication_group": "Metformin"}),
+            lx.data.Extraction(extraction_class="route", extraction_text="PO", attributes={"medication_group": "Metformin"}),
+            lx.data.Extraction(extraction_class="frequency", extraction_text="BID", attributes={"medication_group": "Metformin"}),
+            lx.data.Extraction(
+                extraction_class="medication",
+                extraction_text="Lisinopril",
+                attributes={"temporality": "future", "medication_group": "Lisinopril"},
+            ),
+            lx.data.Extraction(extraction_class="dosage", extraction_text="10 mg", attributes={"medication_group": "Lisinopril"}),
+            lx.data.Extraction(extraction_class="frequency", extraction_text="daily", attributes={"medication_group": "Lisinopril"}),
+            lx.data.Extraction(
+                extraction_class="diagnosis",
+                extraction_text="hypertension",
+                attributes={"temporality": "current", "diagnosis_status": "active"},
+            ),
+        ],
+    )
+
+
 def get_clinical_examples() -> list[lx.data.ExampleData]:
     """Return 4–6 high-quality few-shot examples for clinical extraction."""
     return [
@@ -228,6 +303,8 @@ def get_clinical_examples() -> list[lx.data.ExampleData]:
         _example_procedures(),
         _example_symptoms(),
         _example_radiology(),
+        _example_negation(),
+        _example_temporality(),
     ]
 
 
