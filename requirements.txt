@@ -20,6 +20,7 @@ openpyxl>=3.1.0
 
 # Console / optional
 rich>=13.0.0
+pytest
 
 # Visualization (optional)
 # plotly>=5.18.0

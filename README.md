@@ -54,6 +54,46 @@ Open **http://localhost:8501**. Choose input mode, pick a provider and model in 
 
 ---
 
+## Docker
+
+Run the full app in one command (no Python setup needed):
+
+```bash
+# Build and start
+docker compose up --build
+
+# Open in browser
+open http://localhost:8501
+```
+
+To also run a local Ollama instance alongside the app:
+
+```bash
+docker compose --profile ollama up --build
+# Then pull a model:
+docker exec -it ollama ollama pull qwen2.5-coder:32b-instruct
+```
+
+Environment variables (API keys) are loaded from your `.env` file automatically.
+
+---
+
+## Testing
+
+Run unit tests:
+
+```bash
+python -m pytest -q
+```
+
+Or use the Makefile shortcut:
+
+```bash
+make test
+```
+
+---
+
 ## Environment variables
 
 Set keys in `.env` or your shell (see `.env.example`):

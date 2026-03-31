@@ -20,6 +20,7 @@ import streamlit as st
 
 from extractor import extract, extractions_to_serializable, rows_to_annotated_document
 from utils.export import rows_to_excel_bytes
+from utils.fhir import rows_to_fhir_bundle
 from utils.visualization import generate_html_visualization, save_annotated_documents_jsonl
 
 load_dotenv()
@@ -464,6 +465,16 @@ if extract_clicked and text.strip():
                     file_name="clinical_extractions.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 )
+                fhir_bundle = rows_to_fhir_bundle(rows)
+                fhir_json = json.dumps(fhir_bundle, indent=2)
+                st.download_button(
+                    "Download FHIR R4 Bundle",
+                    fhir_json,
+                    file_name="clinical_fhir_bundle.json",
+                    mime="application/fhir+json",
+                )
+                with st.expander("FHIR Bundle preview"):
+                    st.json(fhir_bundle)
         else:
             st.info("No extractions returned.")
 

@@ -1,0 +1,35 @@
+version: "3.9"
+
+services:
+  clinicalextract:
+    build: .
+    container_name: clinicalextract
+    ports:
+      - "8501:8501"
+    env_file:
+      - .env                      # picks up LANGEXTRACT_API_KEY, OPENAI_API_KEY, etc.
+    volumes:
+      - ./samples:/app/samples    # mount samples dir so gold/pred files persist
+      - ./eval_results:/app/eval_results
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+  # Optional: local Ollama service (comment out if not needed)
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    restart: unless-stopped
+    profiles:
+      - ollama                    # only starts with: docker compose --profile ollama up
+
+volumes:
+  ollama_data:

@@ -6,6 +6,7 @@ import pandas as pd
 import streamlit as st
 
 from utils.export import rows_to_excel_bytes
+from utils.fhir import rows_to_fhir_bundle
 
 
 if "history" not in st.session_state:
@@ -31,12 +32,12 @@ else:
         )
     st.dataframe(pd.DataFrame(summary_rows), use_container_width=True, hide_index=True)
 
-    for idx, item in enumerate(reversed(history), start=1):
+    for hi, item in enumerate(reversed(history), start=1):
         rows = item.get("rows", [])
         provider = item.get("provider", "")
         label = item.get("label", "")
         count = item.get("count", 0)
-        run_num = total - idx + 1
+        run_num = total - hi + 1
         with st.expander(f"Run {run_num} · [{provider}] {label} · {count} entities"):
             st.caption(f"Model: {item.get('model', '')}")
             if rows:
@@ -56,6 +57,14 @@ else:
                 file_name=f"clinical_extractions_run_{run_num}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 key=f"hist_xlsx_{run_num}",
+            )
+            fhir_bundle = rows_to_fhir_bundle(item.get("rows", []))
+            st.download_button(
+                "Download FHIR",
+                json.dumps(fhir_bundle, indent=2),
+                file_name="fhir_bundle.json",
+                mime="application/fhir+json",
+                key=f"fhir_{hi}",
             )
 
     if st.button("Clear all history", type="secondary"):

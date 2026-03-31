@@ -1,0 +1,37 @@
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__/
+pycache/
+*.pyc
+*.pyo
+*.pyd
+.venv
+venv
+*.egg-info
+dist
+build
+
+# Streamlit
+.streamlit/secrets.toml
+
+# Env files with secrets
+.env
+
+# Tests (not needed in image)
+tests/
+
+# Eval outputs
+eval_results/
+
+# Samples with gold/pred (optional — remove if you want them in the image)
+samples/*_pred.json
+
+# macOS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
