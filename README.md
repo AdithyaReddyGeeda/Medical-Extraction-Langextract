@@ -25,10 +25,12 @@ ClinicalExtract wraps LangExtract with a **clinical-focused schema** (medication
 | Area | Description |
 |------|-------------|
 | **Providers** | Ollama (local), Gemini, OpenAI GPT-4o / GPT-4o-mini, Anthropic Claude |
+| **Navigation** | Multipage Streamlit app (`Extract`, `Evaluate`, `History`) |
 | **Input** | Paste text, single **.txt / .pdf / .docx**, **batch** multi-file upload, or built-in samples |
 | **Caching** | Repeated extractions with the same settings are cached (`@st.cache_data`) to avoid redundant LLM calls |
 | **Evidence** | Grouped view by `medication_group` / `lab_group` plus ungrouped “Other” |
-| **History** | Sidebar keeps recent single-note runs (re-download JSON); batch runs are not stored |
+| **History** | Dedicated History page for past runs with JSON/Excel/FHIR re-export |
+| **FHIR** | Export extracted entities as a FHIR R4 `Bundle` JSON |
 | **Evaluation** | `evaluate.py` runs extraction against gold JSON and writes `eval_results/eval_results.json` |
 
 ---
@@ -50,7 +52,8 @@ cp .env.example .env
 streamlit run app.py
 ```
 
-Open **http://localhost:8501**. Choose input mode, pick a provider and model in the sidebar, then **Extract** (or **Extract All** in batch mode).
+Open **http://localhost:8501**. Use the left navigation to switch between **Extract**, **Evaluate**, and **History**.
+On the **Extract** page, choose input mode, pick a provider/model in the sidebar, then run **Extract** (or **Extract All** for batch mode).
 
 ---
 
@@ -165,7 +168,15 @@ Useful flags:
 | `--match` | `partial` | `partial` or `exact` span matching |
 | `--skip-extraction` | off | Score existing `*_pred.json` only |
 
-The report includes per-file aggregate metrics, overall aggregate, and a **per-class** precision / recall / F1 breakdown. You can also use `python -m utils.eval` for a lighter path that only reads existing predictions.
+The report includes per-file aggregate metrics, overall aggregate, and a **per-class** precision / recall / F1 breakdown.
+You can run evaluation either from the **Evaluate** page (in-browser) or via CLI (`evaluate.py`).
+
+---
+
+## FHIR export
+
+After extraction, go to **Structured output** and use **Download FHIR R4 Bundle** to export a JSON FHIR `Bundle`.
+You can also re-export FHIR from previous runs on the **History** page.
 
 ---
 
@@ -173,13 +184,24 @@ The report includes per-file aggregate metrics, overall aggregate, and a **per-c
 
 ```
 .
-├── app.py                 # Streamlit UI
+├── app.py                 # Streamlit multipage entrypoint
 ├── evaluate.py            # CLI evaluation (runs extractor + metrics)
 ├── extractor.py           # LangExtract wiring, clinical schema, few-shots
+├── pages/
+│   ├── extract.py         # Main extraction UI
+│   ├── evaluate.py        # In-browser evaluation UI
+│   └── history.py         # Session history browser
 ├── utils/
-│   ├── visualization.py # HTML viz helpers
-│   └── eval.py            # Metrics, load_gold, per-class evaluation
+│   ├── visualization.py   # HTML viz helpers
+│   ├── eval.py            # Metrics, load_gold, per-class evaluation
+│   ├── export.py          # Excel export helper
+│   └── fhir.py            # FHIR R4 Bundle mapping
 ├── samples/               # .txt snippets + optional matching .json gold
+├── tests/                 # Pytest unit tests (core logic)
+├── Dockerfile
+├── docker-compose.yml
+├── .dockerignore
+├── Makefile
 ├── requirements.txt
 ├── .env.example
 ├── README.md
