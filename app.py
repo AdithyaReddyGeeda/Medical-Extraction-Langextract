@@ -12,6 +12,7 @@ import os
 
 from dotenv import load_dotenv
 load_dotenv()
+import html
 import json
 import tempfile
 from pathlib import Path
@@ -25,6 +26,91 @@ from utils.visualization import (
     save_annotated_documents_jsonl,
     generate_html_visualization,
 )
+
+
+_ENTITY_COLORS = {
+    "medication": "#BFDBFE",
+    "dosage": "#BFDBFE",
+    "route": "#BFDBFE",
+    "frequency": "#BFDBFE",
+    "duration": "#BFDBFE",
+    "indication": "#BFDBFE",
+    "medication_status": "#BFDBFE",
+    "diagnosis": "#FECACA",
+    "diagnosis_icd": "#FECACA",
+    "diagnosis_status": "#FECACA",
+    "diagnosis_onset": "#FECACA",
+    "lab_test": "#BBF7D0",
+    "lab_value": "#BBF7D0",
+    "lab_unit": "#BBF7D0",
+    "lab_reference": "#BBF7D0",
+    "lab_interpretation": "#BBF7D0",
+    "procedure": "#FDE68A",
+    "procedure_date": "#FDE68A",
+    "procedure_laterality": "#FDE68A",
+    "procedure_findings": "#FDE68A",
+    "symptom_sign": "#F9A8D4",
+    "adverse_event_allergy": "#FDBA74",
+    "allergy_severity": "#FDBA74",
+    "demographic_age": "#DDD6FE",
+    "demographic_sex": "#DDD6FE",
+    "demographic_dob": "#DDD6FE",
+}
+_DEFAULT_ENTITY_COLOR = "#E5E7EB"
+
+
+def _render_highlighted_html(text: str, rows: list[dict]) -> str:
+    spans: list[dict] = []
+    for r in rows:
+        start = r.get("start")
+        end = r.get("end")
+        if isinstance(start, int) and isinstance(end, int):
+            spans.append(r)
+    spans.sort(key=lambda r: r["start"])
+
+    pieces: list[str] = []
+    cursor = 0
+    n = len(text)
+    for r in spans:
+        start = r["start"]
+        end = r["end"]
+        if start < cursor:
+            continue
+        if start < 0 or end > n or end <= start:
+            continue
+        pieces.append(html.escape(text[cursor:start]))
+        class_name = str(r.get("class", "unknown"))
+        color = _ENTITY_COLORS.get(class_name, _DEFAULT_ENTITY_COLOR)
+        span_text = text[start:end]
+        pieces.append(
+            f'<mark style="background:{color};border-radius:3px;padding:1px 3px;cursor:help;" '
+            f'title="{html.escape(class_name)}">{html.escape(span_text)}</mark>'
+        )
+        cursor = end
+    pieces.append(html.escape(text[cursor:]))
+    body = "".join(pieces)
+    return (
+        '<div style="font-family:monospace;white-space:pre-wrap;line-height:1.8;'
+        'padding:12px;border:1px solid #e5e7eb;border-radius:6px;">'
+        f"{body}"
+        "</div>"
+    )
+
+
+def _render_legend_html(rows: list[dict]) -> str:
+    classes = sorted({str(r.get("class", "")) for r in rows if r.get("class")})
+    chips = []
+    for class_name in classes:
+        color = _ENTITY_COLORS.get(class_name, _DEFAULT_ENTITY_COLOR)
+        chips.append(
+            f'<span style="background:{color};padding:2px 8px;border-radius:4px;'
+            f'margin:2px;font-size:0.8em;">{html.escape(class_name)}</span>'
+        )
+    return (
+        '<div style="margin-bottom:8px;flex-wrap:wrap;display:flex;gap:4px;">'
+        + "".join(chips)
+        + "</div>"
+    )
 
 st.set_page_config(
     page_title="ClinicalExtract",
@@ -115,6 +201,45 @@ def _render_evidence_group(label: str, group_rows: list[dict]) -> None:
 def _history_label(note_text: str) -> str:
     t = note_text.strip()
     return (t[:60] + "...") if len(t) > 60 else t
+
+
+def _rows_to_excel_bytes(rows: list[dict], sheet_name: str = "Extractions") -> bytes:
+    import openpyxl
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = sheet_name
+    headers = list(rows[0].keys()) if rows else []
+    if headers:
+        ws.append(headers)
+        for row in rows:
+            out_row = []
+            for key in headers:
+                value = row.get(key)
+                if key == "attributes" and isinstance(value, dict):
+                    out_row.append(json.dumps(value))
+                elif isinstance(value, (dict, list)):
+                    out_row.append(json.dumps(value))
+                else:
+                    out_row.append(value)
+            ws.append(out_row)
+
+        header_font = openpyxl.styles.Font(bold=True)
+        header_fill = openpyxl.styles.PatternFill("solid", fgColor="BDD7EE")
+        for cell in ws[1]:
+            cell.font = header_font
+            cell.fill = header_fill
+
+        for col_cells in ws.columns:
+            col_letter = col_cells[0].column_letter
+            ws.column_dimensions[col_letter].width = (
+                min(max(len(str(cell.value or "")) for cell in col_cells), 60) + 2
+            )
+
+    ws.freeze_panes = "A2"
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
 
 
 # ---------------------------------------------------------------------------
@@ -330,6 +455,13 @@ if extract_all_clicked and input_source == "Batch upload":
                 file_name="clinical_extractions_batch.csv",
                 mime="text/csv",
             )
+            excel_bytes = _rows_to_excel_bytes(combined)
+            st.download_button(
+                "Download combined Excel",
+                excel_bytes,
+                file_name="clinical_extractions_batch.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
 
 # ---------------------------------------------------------------------------
 # Run extraction and display results (single-note modes)
@@ -378,7 +510,9 @@ if extract_clicked and text.strip():
     tab1, tab2, tab3, tab4 = st.tabs(["Raw text", "Structured output", "Visualization", "Evidence / Spans"])
 
     with tab1:
-        st.text_area("Original text", result.text or "", height=300, disabled=True)
+        legend_html = _render_legend_html(rows)
+        highlighted_html = _render_highlighted_html(result_text, rows)
+        st.components.v1.html(legend_html + highlighted_html, height=500, scrolling=True)
 
     with tab2:
         if rows:
@@ -394,6 +528,14 @@ if extract_clicked and text.strip():
             csv_buf = io.StringIO()
             df.to_csv(csv_buf, index=False)
             st.download_button("Download CSV", csv_buf.getvalue(), file_name="clinical_extractions.csv", mime="text/csv")
+            if rows:
+                excel_bytes = _rows_to_excel_bytes(rows)
+                st.download_button(
+                    "Download Excel",
+                    excel_bytes,
+                    file_name="clinical_extractions.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                )
         else:
             st.info("No extractions returned.")
 
