@@ -236,6 +236,3 @@ For dependency bumps, schema improvements, and production options, see **[UPGRAD
 
 ---
 
-## License
-
-MIT. See [LICENSE](LICENSE).
